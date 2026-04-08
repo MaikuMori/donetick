@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1
+#
+# Source build Dockerfile for donetick — bundles the frontend from
+# donetick/frontend and compiles the Go binary from the current checkout.
+# Used for custom/patched builds when the upstream release flow isn't
+# available.
+
+# --- Frontend build ---------------------------------------------------------
+FROM node:23-alpine AS frontend
+RUN apk add --no-cache git
+WORKDIR /src
+RUN git clone --depth=1 https://github.com/donetick/frontend.git .
+RUN npm install
+RUN npm run build-selfhosted
+
+# --- Go build ---------------------------------------------------------------
+FROM golang:1.24-alpine AS gobuild
+RUN apk add --no-cache gcc musl-dev
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+# Replace the placeholder frontend/dist with the freshly built one.
+RUN rm -rf frontend/dist
+COPY --from=frontend /src/dist ./frontend/dist
+ENV CGO_ENABLED=1
+RUN go build -o /out/donetick .
+
+# --- Runtime ----------------------------------------------------------------
+FROM alpine:latest
+RUN apk --no-cache add tzdata ca-certificates libc6-compat
+COPY --from=gobuild /out/donetick /donetick
+COPY --from=gobuild /src/config /config
+ENV DT_ENV="selfhosted"
+EXPOSE 2021
+CMD ["/donetick"]
